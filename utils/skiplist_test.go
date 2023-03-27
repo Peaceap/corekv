@@ -48,6 +48,7 @@ func TestSkipListBasicCRUD(t *testing.T) {
 	//Put & Get
 	entry1 := codec.NewEntry([]byte("Key1"), []byte("Val1"))
 	assert.Nil(t, list.Add(entry1))
+	//fmt.Println(entry1.Value, list.Search(entry1.Key).Value)
 	assert.Equal(t, entry1.Value, list.Search(entry1.Key).Value)
 
 	entry2 := codec.NewEntry([]byte("Key2"), []byte("Val2"))
