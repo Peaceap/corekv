@@ -50,13 +50,15 @@ type node struct {
 	// can be atomically loaded and stored:
 	//   value offset: uint32 (bits 0-31)
 	//   value size  : uint16 (bits 32-63)
+	// 前32位是 value在内存池偏移位
+	// 后32位是数据长度
 	value uint64
 
 	// A byte slice is 24 bytes. We are trying to save space here.
 	keyOffset uint32 // Immutable. No need to lock to access key.
 	keySize   uint16 // Immutable. No need to lock to access key.
 
-	// Height of the tower.
+	// 一个跳表节点的高度应该是动态更新的
 	height uint16
 
 	// Most nodes do not need to use the full height of the tower, since the
@@ -66,24 +68,32 @@ type node struct {
 	// is deliberately truncated to not include unneeded tower elements.
 	//
 	// All accesses to elements should use CAS operations, with no need to lock.
+
+	// 记录节点在每一层的下一个节点
 	tower [maxHeight]uint32
 }
 
 type Skiplist struct {
-	height     int32 // Current height. 1 <= height <= kMaxHeight. CAS.
+	//跳表已使用的高度
+	height int32 // Current height. 1 <= height <= kMaxHeight. CAS.
+	//跳表 头节点的偏移位
 	headOffset uint32
-	ref        int32
-	arena      *Arena
-	OnClose    func()
+	//引用计数
+	ref int32
+	//内存池
+	arena   *Arena
+	OnClose func()
 }
 
 // IncrRef increases the refcount
 func (s *Skiplist) IncrRef() {
+	//引用计数 +1
 	atomic.AddInt32(&s.ref, 1)
 }
 
 // DecrRef decrements the refcount, deallocating the Skiplist when done using it
 func (s *Skiplist) DecrRef() {
+	//引用计数 -1 跳表和内存池 优雅关闭
 	newRef := atomic.AddInt32(&s.ref, -1)
 	if newRef > 0 {
 		return
@@ -99,8 +109,13 @@ func (s *Skiplist) DecrRef() {
 
 func newNode(arena *Arena, key []byte, v ValueStruct, height int) *node {
 	// The base level is already allocated in the node struct.
+	// 内存池 暴露的接口
+	// putNode (node.height)  返回这一层 还没用到的位置 作为新节点的偏移位
 	nodeOffset := arena.putNode(height)
+	// putKey（node.key） 返回 key在arena中的偏移位
 	keyOffset := arena.putKey(key)
+	// 对val值 和 val的 offset 进行编码
+
 	val := encodeValue(arena.putVal(v), v.EncodedSize())
 
 	node := arena.getNode(nodeOffset)
@@ -123,30 +138,37 @@ func decodeValue(value uint64) (valOffset uint32, valSize uint32) {
 
 // NewSkiplist makes a new empty skiplist, with a given arena size
 func NewSkiplist(arenaSize int64) *Skiplist {
+	// 申请内存池
 	arena := newArena(arenaSize)
+	// 初始化头节点 头节点的层数是最高层 值和key都应该是 空 这里不应该是0
 	head := newNode(arena, nil, ValueStruct{}, maxHeight)
-	ho := arena.getNodeOffset(head)
+	// getNodeOffset 返回节点在内存池中的偏移位
+	headoffset := arena.getNodeOffset(head)
 	return &Skiplist{
 		height:     1,
-		headOffset: ho,
+		headOffset: headoffset,
 		arena:      arena,
 		ref:        1,
 	}
 }
 
+// 返回节点的值的 偏移位 和 数据长度
 func (s *node) getValueOffset() (uint32, uint32) {
 	value := atomic.LoadUint64(&s.value)
 	return decodeValue(value)
 }
 
+// 返回节点的 key
 func (s *node) key(arena *Arena) []byte {
 	return arena.getKey(s.keyOffset, s.keySize)
 }
 
+// 将encode好的value 设置成节点val
 func (s *node) setValue(arena *Arena, vo uint64) {
 	atomic.StoreUint64(&s.value, vo)
 }
 
+// 返回下一个节点的偏移位
 func (s *node) getNextOffset(h int) uint32 {
 	return atomic.LoadUint32(&s.tower[h])
 }
@@ -162,6 +184,7 @@ func (s *node) casNextOffset(h int, old, val uint32) bool {
 //	return n != nil && CompareKeys(key, n.key) > 0
 //}
 
+// 返回 都有哪些层需要更新
 func (s *Skiplist) randomHeight() int {
 	h := 1
 	for h < maxHeight && FastRand() <= heightIncrease {
@@ -184,6 +207,7 @@ func (s *Skiplist) getHead() *node {
 // If less=false, it finds leftmost node such that node.key > key (if allowEqual=false) or
 // node.key >= key (if allowEqual=true).
 // Returns the node found. The bool returned is true if the node has key equal to given key.
+// 我爱这个接口 爱死了
 func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool) {
 	x := s.getHead()
 	level := int(s.getHeight() - 1)
@@ -417,19 +441,23 @@ func (s *Skiplist) MemSize() int64 { return s.arena.size() }
 
 // Iterator is an iterator over skiplist object. For new objects, you just
 // need to initialize Iterator.list.
+
+// 跳表的迭代器实现
 type SkipListIterator struct {
 	list *Skiplist
 	n    *node
 }
 
+// 跳表接口  定位到跳表的头节点
 func (s *SkipListIterator) Rewind() {
 	s.SeekToFirst()
 }
 
 func (s *SkipListIterator) Item() Item {
 	return &Entry{
-		Key:       s.Key(),
-		Value:     s.Value().Value,
+		Key:   s.Key(),
+		Value: s.Value().Value,
+		//过期时间
 		ExpiresAt: s.Value().ExpiresAt,
 		Meta:      s.Value().Meta,
 		Version:   s.Value().Version,
@@ -447,12 +475,17 @@ func (s *SkipListIterator) Valid() bool { return s.n != nil }
 
 // Key returns the key at the current position.
 func (s *SkipListIterator) Key() []byte {
-	//implement me here
+	//调用  node.key()
+	return s.n.key(s.list.arena)
 }
 
 // Value returns value.
 func (s *SkipListIterator) Value() ValueStruct {
 	//implement me here
+	n := s.n
+	valOffset, valSize := n.getValueOffset()
+	vs := s.list.arena.getVal(valOffset, valSize)
+	return vs
 }
 
 // ValueUint64 returns the uint64 value of the current node.
@@ -474,17 +507,26 @@ func (s *SkipListIterator) Prev() {
 
 // 找到 >= target 的第一个节点
 func (s *SkipListIterator) Seek(target []byte) {
-	//implement me here
+	l := s.list
+	//findNear(key , less bool, allowEqual bool) (*node, bool)
+	//找到第一个大于target的节点 less = false   允许相等 allowEqual = true
+	n, _ := l.findNear(target, false, true)
+	s.n = n
 }
 
 // 找到 <= target 的第一个节点
 func (s *SkipListIterator) SeekForPrev(target []byte) {
-	//implement me here
+	l := s.list
+	//findNear(key , less bool, allowEqual bool) (*node, bool)
+	//找到第一个小于target的节点 less = false   允许相等 allowEqual = true
+	n, _ := l.findNear(target, true, true)
+	s.n = n
 }
 
-//定位到链表的第一个节点
+// 定位到链表的第一个节点
 func (s *SkipListIterator) SeekToFirst() {
 	//implement me here
+	s.n = s.list.getHead()
 }
 
 // SeekToLast seeks position at the last entry in list.
@@ -502,6 +544,7 @@ type UniIterator struct {
 }
 
 // FastRand is a fast thread local random function.
+//
 //go:linkname FastRand runtime.fastrand
 func FastRand() uint32
 

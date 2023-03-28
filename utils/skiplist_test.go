@@ -39,6 +39,7 @@ func TestSkipListBasicCRUD(t *testing.T) {
 	entry1 := NewEntry([]byte(RandString(10)), []byte("Val1"))
 	list.Add(entry1)
 	vs := list.Search(entry1.Key)
+	//fmt.Println(entry1.Value, vs.Value)
 	assert.Equal(t, entry1.Value, vs.Value)
 
 	entry2 := NewEntry([]byte(RandString(10)), []byte("Val2"))
