@@ -53,11 +53,11 @@ func TestSkipListBasicCRUD(t *testing.T) {
 	assert.Equal(t, entry2_new.Value, list.Search(entry2_new.Key).Value)
 }
 
-//当申请的zrenaSize为1000， 但是add的操作次数为1000000时
-//会发生panic，why？
-//原因：不断向skiplist插入数据，而arena不断申请内存
-//当申请的内存超过预设的大小时，缺没有flush到sst的操作，所以会出错
-//关于SST的相关知识，在lession5有进行讲解
+// 当申请的zrenaSize为1000， 但是add的操作次数为1000000时
+// 会发生panic，why？
+// 原因：不断向skiplist插入数据，而arena不断申请内存
+// 当申请的内存超过预设的大小时，没有flush到sst的操作，所以会出错
+// 关于SST的相关知识，在lession5有进行讲解
 func Benchmark_SkipListBasicCRUD(b *testing.B) {
 	list := NewSkipList(1000)
 	key, val := "", ""
