@@ -41,6 +41,17 @@ func (s *cmSketch) Increment(hashed uint64) {
 
 func (s *cmSketch) Estimate(hashed uint64) int64 {
 	//implement me here!!!
+	//找到同一个位置 最小的统计值
+	mi := byte(255)
+	for i := range s.rows {
+		v := s.rows[i].get((hashed ^ s.seed[i]) & s.mask)
+		if v < mi {
+			mi = v
+		}
+
+	}
+	return int64(mi)
+
 }
 
 // Reset halves all counter values.

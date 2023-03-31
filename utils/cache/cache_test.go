@@ -8,6 +8,7 @@ import (
 
 func TestCacheBasicCRUD(t *testing.T) {
 	cache := NewCache(5)
+
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
@@ -23,6 +24,6 @@ func TestCacheBasicCRUD(t *testing.T) {
 			continue
 		}
 		assert.Equal(t, res, nil)
-
+		//println("--------------------------------")
 	}
 }

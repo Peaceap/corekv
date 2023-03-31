@@ -8,10 +8,13 @@ import (
 )
 
 type Cache struct {
-	m         sync.RWMutex
-	lru       *windowLRU
-	slru      *segmentedLRU
-	door      *BloomFilter
+	m    sync.RWMutex
+	lru  *windowLRU
+	slru *segmentedLRU
+
+	//布隆过滤器用来处理大量数据访问次数为1的这种情况
+	door *BloomFilter
+	// 计数器
 	c         *cmSketch
 	t         int32
 	threshold int32
@@ -121,7 +124,7 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 	}
 
 	item := val.Value.(*storeItem)
-
+	println(item.key)
 	if item.conflict != conflictHash {
 		c.c.Increment(keyHash)
 		return nil, false
