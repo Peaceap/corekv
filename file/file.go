@@ -31,6 +31,7 @@ package file
 import "io"
 
 // Options
+
 type Options struct {
 	FID      uint32
 	FileName string

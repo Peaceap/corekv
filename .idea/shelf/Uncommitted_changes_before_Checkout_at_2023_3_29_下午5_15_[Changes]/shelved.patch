@@ -1,0 +1,109 @@
+Index: utils/arena.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/*\n * Copyright 2017 Dgraph Labs, Inc. and Contributors\n *\n * Licensed under the Apache License, Version 2.0 (the \"License\");\n * you may not use this file except in compliance with the License.\n * You may obtain a copy of the License at\n *\n *     http://www.apache.org/licenses/LICENSE-2.0\n *\n * Unless required by applicable law or agreed to in writing, software\n * distributed under the License is distributed on an \"AS IS\" BASIS,\n * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n * See the License for the specific language governing permissions and\n * limitations under the License.\n */\n\npackage utils\n\nimport (\n\t\"github.com/pkg/errors\"\n\t\"log\"\n\t\"sync/atomic\"\n\t\"unsafe\"\n)\n\nconst (\n\toffsetSize = int(unsafe.Sizeof(uint32(0)))\n\n\t// Always align nodes on 64-bit boundaries, even on 32-bit architectures,\n\t// so that the node.value field is 64-bit aligned. This is necessary because\n\t// node.getValueOffset uses atomic.LoadUint64, which expects its input\n\t// pointer to be 64-bit aligned.\n\tnodeAlign = int(unsafe.Sizeof(uint64(0))) - 1\n\n\tMaxNodeSize = int(unsafe.Sizeof(node{}))\n)\n\n// Arena should be lock-free.\ntype Arena struct {\n\tn          uint32\n\tshouldGrow bool\n\tbuf        []byte\n}\n\n// newArena returns a new arena.\nfunc newArena(n int64) *Arena {\n\t// Don't store data at position 0 in order to reserve offset=0 as a kind\n\t// of nil pointer.\n\tout := &Arena{\n\t\tn:   1,\n\t\tbuf: make([]byte, n),\n\t}\n\treturn out\n}\n\nfunc (s *Arena) allocate(sz uint32) uint32 {\n\toffset := atomic.AddUint32(&s.n, sz)\n\tif !s.shouldGrow {\n\t\tAssertTrue(int(offset) <= len(s.buf))\n\t\treturn offset - sz\n\t}\n\n\t// We are keeping extra bytes in the end so that the checkptr doesn't fail. We apply some\n\t// intelligence to reduce the size of the node by only keeping towers upto valid height and not\n\t// maxHeight. This reduces the node's size, but checkptr doesn't know about its reduced size.\n\t// checkptr tries to verify that the node of size MaxNodeSize resides on a single heap\n\t// allocation which causes this error: checkptr:converted pointer straddles multiple allocations\n\tif int(offset) > len(s.buf)-MaxNodeSize {\n\t\tgrowBy := uint32(len(s.buf))\n\t\tif growBy > 1<<30 {\n\t\t\tgrowBy = 1 << 30\n\t\t}\n\t\tif growBy < sz {\n\t\t\tgrowBy = sz\n\t\t}\n\t\tnewBuf := make([]byte, len(s.buf)+int(growBy))\n\t\tAssertTrue(len(s.buf) == copy(newBuf, s.buf))\n\t\ts.buf = newBuf\n\t}\n\treturn offset - sz\n}\n\nfunc (s *Arena) size() int64 {\n\treturn int64(atomic.LoadUint32(&s.n))\n}\n\n// putNode allocates a node in the arena. The node is aligned on a pointer-sized\n// boundary. The arena offset of the node is returned.\nfunc (s *Arena) putNode(height int) uint32 {\n\t// Compute the amount of the tower that will never be used, since the height\n\t// is less than maxHeight.\n\tunusedSize := (maxHeight - height) * offsetSize\n\n\t// Pad the allocation with enough bytes to ensure pointer alignment.\n\tl := uint32(MaxNodeSize - unusedSize + nodeAlign)\n\tn := s.allocate(l)\n\n\t// Return the aligned offset.\n\tm := (n + uint32(nodeAlign)) & ^uint32(nodeAlign)\n\treturn m\n}\n\n// Put will *copy* val into arena. To make better use of this, reuse your input\n// val buffer. Returns an offset into buf. User is responsible for remembering\n// size of val. We could also store this size inside arena but the encoding and\n// decoding will incur some overhead.\nfunc (s *Arena) putVal(v ValueStruct) uint32 {\n\tl := uint32(v.EncodedSize())\n\toffset := s.allocate(l)\n\tv.EncodeValue(s.buf[offset:])\n\treturn offset\n}\n\nfunc (s *Arena) putKey(key []byte) uint32 {\n\tkeySz := uint32(len(key))\n\toffset := s.allocate(keySz)\n\tbuf := s.buf[offset : offset+keySz]\n\tAssertTrue(len(key) == copy(buf, key))\n\treturn offset\n}\n\n// getNode returns a pointer to the node located at offset. If the offset is\n// zero, then the nil node pointer is returned.\nfunc (s *Arena) getNode(offset uint32) *node {\n\tif offset == 0 {\n\t\treturn nil\n\t}\n\treturn (*node)(unsafe.Pointer(&s.buf[offset]))\n}\n\n// getKey returns byte slice at offset.\nfunc (s *Arena) getKey(offset uint32, size uint16) []byte {\n\treturn s.buf[offset : offset+uint32(size)]\n}\n\n// getVal returns byte slice at offset. The given size should be just the value\n// size and should NOT include the meta bytes.\nfunc (s *Arena) getVal(offset uint32, size uint32) (ret ValueStruct) {\n\tret.DecodeValue(s.buf[offset : offset+size])\n\treturn\n}\n\n// getNodeOffset returns the offset of node in the arena. If the node pointer is\n// nil, then the zero offset is returned.\nfunc (s *Arena) getNodeOffset(nd *node) uint32 {\n\tif nd == nil {\n\t\treturn 0\n\t}\n\n\treturn uint32(uintptr(unsafe.Pointer(nd)) - uintptr(unsafe.Pointer(&s.buf[0])))\n}\n\n// AssertTrue asserts that b is true. Otherwise, it would log fatal.\nfunc AssertTrue(b bool) {\n\tif !b {\n\t\tlog.Fatalf(\"%+v\", errors.Errorf(\"Assert failed\"))\n\t}\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/utils/arena.go b/utils/arena.go
+--- a/utils/arena.go	(revision 6211ed85aea21559420158563626608ee1dd0bb1)
++++ b/utils/arena.go	(date 1680081279093)
+@@ -30,22 +30,32 @@
+ 	// so that the node.value field is 64-bit aligned. This is necessary because
+ 	// node.getValueOffset uses atomic.LoadUint64, which expects its input
+ 	// pointer to be 64-bit aligned.
++	// 64 位对齐的指针
+ 	nodeAlign = int(unsafe.Sizeof(uint64(0))) - 1
+ 
++	//这里的 MaxNodeSize 是按照节点的最高 Level来计算的 但是实际结果中，这个node不一定需要记录到整个 SkipList最高的层度
+ 	MaxNodeSize = int(unsafe.Sizeof(node{}))
+ )
+ 
+ // Arena should be lock-free.
++// Arena 只支持追加操作，在内存中占用的空间超过一定阈值后
++// 整个内存池会变成不可变 随后会持久化成sst 文件
+ type Arena struct {
++
++	//Arena 已分配的
+ 	n          uint32
+ 	shouldGrow bool
+-	buf        []byte
++
++	//Arena 申请的内存空间
++	buf []byte
+ }
+ 
+ // newArena returns a new arena.
+ func newArena(n int64) *Arena {
+ 	// Don't store data at position 0 in order to reserve offset=0 as a kind
+ 	// of nil pointer.
++
++	//这里从1开始   0是作为空指针的标志
+ 	out := &Arena{
+ 		n:   1,
+ 		buf: make([]byte, n),
+@@ -53,8 +63,12 @@
+ 	return out
+ }
+ 
++//内存池 暴露分配接口 返回分配内存后的起点
+ func (s *Arena) allocate(sz uint32) uint32 {
++
++	// s.n 是内存池已经分配的内存 offset
+ 	offset := atomic.AddUint32(&s.n, sz)
++	// 在不允许内存增长的时候 如果分配内存大于剩余内存 会爆出异常
+ 	if !s.shouldGrow {
+ 		AssertTrue(int(offset) <= len(s.buf))
+ 		return offset - sz
+@@ -65,7 +79,9 @@
+ 	// maxHeight. This reduces the node's size, but checkptr doesn't know about its reduced size.
+ 	// checkptr tries to verify that the node of size MaxNodeSize resides on a single heap
+ 	// allocation which causes this error: checkptr:converted pointer straddles multiple allocations
++	//如果需要增长
+ 	if int(offset) > len(s.buf)-MaxNodeSize {
++		// 这里做一个增长限制 不会增长的太离谱
+ 		growBy := uint32(len(s.buf))
+ 		if growBy > 1<<30 {
+ 			growBy = 1 << 30
+@@ -77,6 +93,7 @@
+ 		AssertTrue(len(s.buf) == copy(newBuf, s.buf))
+ 		s.buf = newBuf
+ 	}
++
+ 	return offset - sz
+ }
+ 
+@@ -89,13 +106,14 @@
+ func (s *Arena) putNode(height int) uint32 {
+ 	// Compute the amount of the tower that will never be used, since the height
+ 	// is less than maxHeight.
++	// 一个 offsetSize 相当于一个指针大小
+ 	unusedSize := (maxHeight - height) * offsetSize
+ 
+-	// Pad the allocation with enough bytes to ensure pointer alignment.
++	// 用足够的字节填充分配以确保指针对齐
+ 	l := uint32(MaxNodeSize - unusedSize + nodeAlign)
+ 	n := s.allocate(l)
+ 
+-	// Return the aligned offset.
++	// m 是内存字节对齐的地址
+ 	m := (n + uint32(nodeAlign)) & ^uint32(nodeAlign)
+ 	return m
+ }
+@@ -111,6 +129,7 @@
+ 	return offset
+ }
+ 
++// 在内存中存 key
+ func (s *Arena) putKey(key []byte) uint32 {
+ 	keySz := uint32(len(key))
+ 	offset := s.allocate(keySz)
+@@ -121,6 +140,8 @@
+ 
+ // getNode returns a pointer to the node located at offset. If the offset is
+ // zero, then the nil node pointer is returned.
++
++// 取出一个节点
+ func (s *Arena) getNode(offset uint32) *node {
+ 	if offset == 0 {
+ 		return nil

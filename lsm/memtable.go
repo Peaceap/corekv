@@ -29,7 +29,9 @@ type memTable struct {
 	sl  *utils.SkipList
 }
 
-//todo: mock, need to add real logic
+//todo: 什么是 memTable ?
+
+// todo: mock, need to add real logic
 func NewMemtable() (*memTable, error) {
 
 	return nil, nil
@@ -68,7 +70,7 @@ func (m *memTable) Size() int64 {
 	return m.sl.Size()
 }
 
-//recovery
+// recovery
 func recovery(opt *Options) (*memTable, []*memTable) {
 	// TODO 这里需要实现获取mem list
 	fileOpt := &file.Options{

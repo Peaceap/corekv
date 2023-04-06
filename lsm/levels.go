@@ -159,6 +159,7 @@ func (lm *levelManager) build() error {
 	}
 	var maxFid uint64
 	for fID, tableInfo := range manifest.Tables {
+		//拿到SStable 文件的名字
 		fileName := utils.FileNameSSTable(lm.opt.WorkDir, fID)
 		if fID > maxFid {
 			maxFid = fID
